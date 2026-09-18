@@ -1,5 +1,5 @@
 import express from "express";
-import { adminUpdateAttendance, checkEmployeeAuth, clockIn, clockOut, employeeLogin, employeeLogout, employeeManualUpdate, getAdminAttendanceReport, getEmployeeAttendanceReport, getEmployeeById } from "../controllers/attendance.controller.js";
+import { adminUpdateAttendance, checkEmployeeAuth, clockIn, clockOut, employeeLogin, employeeLogout, employeeManualUpdate, getAdminAttendanceReport, getAttendanceOverview, getAttendanceTrend, getEmployeeAttendanceReport, getEmployeeById } from "../controllers/attendance.controller.js";
 import { protectEmployeeRoute, protectRoute } from "../middlewares/auth.js";
 import { getCustomerById } from "../controllers/controller.customer.js";
 
@@ -37,6 +37,10 @@ attendanceRoutes.get("/employee/:id",protectEmployeeRoute, getEmployeeById);
 // These routes are strictly protected by your existing Admin CRM authentication
 attendanceRoutes.post("/admin/update", protectRoute, adminUpdateAttendance);
 attendanceRoutes.get("/admin/report", protectRoute, getAdminAttendanceReport);
+
+attendanceRoutes.get("/trend", protectRoute, getAttendanceTrend);
+attendanceRoutes.get("/overview", protectRoute, getAttendanceOverview);
+
 
 
 export default attendanceRoutes;

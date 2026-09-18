@@ -2,6 +2,8 @@
 export const ALLOWED_ORIGINS = [
   "http://localhost:3000",
   "http://localhost:5678/",
+  "https://creatikai.com",
+  "https://staff.creatikai.com",
   "https://ibigdata.in",
   "https://property.ibigdata.in",
   "https://propertybulk.ibigdata.in",
@@ -16,4 +18,4 @@ export const ALLOWED_ORIGINS = [
   "https://estateai.in",
 ];
 
-export const clientUrl = "https://matri.ibigdata.in";
+export const clientUrl = "https://staff.creatikai.com";

@@ -477,11 +477,10 @@ const CACHE_TTL_MS = 0.1 * 60 * 1000;
 
 export const getDashboardStatsCount = async (req, res, next) => {
   try {
-
     const admin = req.admin;
 
     const accessFilter = await getCustomerAccessFilter(admin);
-    const where = Object.keys(accessFilter).length
+    const customerWhere = Object.keys(accessFilter).length
       ? { AND: [accessFilter] }
       : {};
     const now = Date.now();
@@ -495,16 +494,22 @@ export const getDashboardStatsCount = async (req, res, next) => {
       });
     }
 
+    // Get exact local date string for TODAY (YYYY-MM-DD)
+    const d = new Date();
+    const todayString = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().split("T")[0];
+
     // 2. Fetch all required data concurrently
     const [
       uniqueCustomers,
       totalContacts,
       uniqueFollowups,
-      incomeRecords
+      incomeRecords,
+      todayAttendance,
+      totalTasks
     ] = await Promise.all([
       // 1. Leads: Unique customers by ContactNumber
       prisma.customer.findMany({
-        where,
+        where: customerWhere,
         distinct: ["ContactNumber"],
         select: { id: true },
       }),
@@ -519,10 +524,25 @@ export const getDashboardStatsCount = async (req, res, next) => {
       }),
 
       // 4. Income: Fetching only the Income field to sum it up
-      // Note: If 'Income' is saved as an Int/Float in your schema, 
-      // you could use prisma.income.aggregate({ _sum: { Income: true } }) here instead.
       prisma.income.findMany({
         select: { Name: true } // Assuming the field is named 'Income'
+      }),
+
+      // 5. TODAY'S ATTENDANCE: Count all statuses for today
+      // Using `customer: customerWhere` ensures the admin only sees data for employees they are allowed to see
+      prisma.customerAttendance.findMany({
+        where: {
+          dateString: todayString,
+          customer: customerWhere 
+        },
+        select: { status: true }
+      }),
+
+      // 6. TASKS: Total tasks assigned to employees under this admin's purview
+      prisma.task.count({
+        where: {
+          assignedTo: customerWhere
+        }
       })
     ]);
 
@@ -532,11 +552,37 @@ export const getDashboardStatsCount = async (req, res, next) => {
       0
     );
 
+    // Safely aggregate today's attendance statuses
+    const attendanceStats = {
+      present: 0,
+      half_day: 0,
+      workfromhome: 0,
+      leave: 0,
+      absent: 0
+    };
+
+    todayAttendance.forEach(record => {
+      if (attendanceStats[record.status] !== undefined) {
+        attendanceStats[record.status]++;
+      }
+    });
+
+    // Assemble final stats payload
     const stats = {
       totalCustomers: uniqueCustomers.length,
       convertedLeads: uniqueFollowups.length,
       totalContacts: totalContacts,
-      totalIncome: totalRevenue
+      totalIncome: totalRevenue,
+      
+      // --- New Attendance Data ---
+      todayPresent: attendanceStats.present,
+      todayHalfDay: attendanceStats.half_day,
+      todayWFH: attendanceStats.workfromhome,
+      todayLeave: attendanceStats.leave,
+      todayAbsent: attendanceStats.absent,
+      
+      // --- New Task Data ---
+      totalTasks: totalTasks
     };
 
     // 3. Update the cache
@@ -552,6 +598,221 @@ export const getDashboardStatsCount = async (req, res, next) => {
 
   } catch (error) {
     next(new ApiError(500, error.message));
+  }
+};
+
+// ---------------------------------------------
+// GET EMPLOYEE DISTRIBUTION (DONUT CHART DATA)
+// ---------------------------------------------
+export const getEmployeeDistribution = async (req, res, next) => {
+  try {
+    // The frontend will send the schema field they want to filter by
+    // Defaulting to 'Campaign' (which we treat as 'Department')
+    const { groupBy = 'Campaign' } = req.query;
+
+    // Strict validation to prevent SQL injection or querying unindexed/private fields
+    const validFields = ['Campaign', 'CustomerType', 'CustomerSubType'];
+    if (!validFields.includes(groupBy)) {
+      throw new ApiError(400, "Invalid grouping parameter.");
+    }
+
+    const admin = req.admin;
+    // Assuming you have access filters (RBAC), apply them here if necessary
+    // const accessFilter = await getCustomerAccessFilter(admin);
+
+    // 1. Group the records by the requested field
+    const distribution = await prisma.customer.groupBy({
+      by: [groupBy],
+      _count: { id: true },
+      // where: accessFilter // Uncomment if RBAC applies
+    });
+
+    let totalEmployees = 0;
+    const mergedData = {};
+
+    // 2. Process raw grouped data
+    distribution.forEach((item) => {
+      const count = item._count.id;
+      totalEmployees += count;
+      
+      // Clean up empty, null, or whitespace strings into "Others"
+      let name = item[groupBy];
+      if (!name || name.trim() === '') {
+        name = 'Others';
+      } else {
+        name = name.trim();
+      }
+
+      mergedData[name] = (mergedData[name] || 0) + count;
+    });
+
+    // 3. Format, calculate percentages, and sort
+    const finalData = Object.keys(mergedData).map((name) => {
+      const value = mergedData[name];
+      return {
+        name,
+        value,
+        percentage: totalEmployees > 0 ? Math.round((value / totalEmployees) * 100) : 0,
+      };
+    }).sort((a, b) => b.value - a.value); // Sort highest to lowest
+
+    // Optional: Move "Others" to the very bottom of the array regardless of count
+    const othersIndex = finalData.findIndex(item => item.name === 'Others');
+    if (othersIndex > -1) {
+      const othersItem = finalData.splice(othersIndex, 1)[0];
+      finalData.push(othersItem);
+    }
+
+    res.status(200).json({
+      success: true,
+      total: totalEmployees,
+      data: finalData
+    });
+  } catch (error) {
+    next(new ApiError(error.statusCode || 500, error.message));
+  }
+};
+
+
+// ---------------------------------------------
+// GET EMPLOYEE HIGHLIGHTS (Joiners, Birthdays, Anniversaries)
+// ---------------------------------------------
+export const getEmployeeHighlights = async (req, res, next) => {
+  try {
+    const employees = await prisma.customer.findMany({
+      select: {
+        id: true,
+        customerName: true,
+        CustomerSubType: true,
+        Campaign: true,
+        createdAt: true,
+        CustomerDate: true,
+        CustomerImage: true,
+      }
+    });
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // CRASH-PROOF PARSER: Safely handles Strings, Objects, and DD-MM-YYYY
+    const parseDateStrict = (dateInput) => {
+        if (!dateInput) return null;
+        
+        // If Prisma gave us a Date object directly (like createdAt)
+        if (dateInput instanceof Date) {
+            return isNaN(dateInput.getTime()) ? null : dateInput;
+        }
+
+        const dateStr = String(dateInput).trim();
+        if (dateStr === "") return null;
+        
+        // Match Indian format: DD-MM-YYYY
+        if (/^\d{2}-\d{2}-\d{4}$/.test(dateStr)) {
+            const [dd, mm, yyyy] = dateStr.split('-');
+            return new Date(yyyy, mm - 1, dd);
+        }
+        
+        // Standard fallback
+        const d = new Date(dateStr);
+        return isNaN(d.getTime()) ? null : d;
+    };
+
+    const getNextOccurrence = (dateInput) => {
+      const d = parseDateStrict(dateInput);
+      if (!d) return null;
+
+      const month = d.getMonth();
+      const day = d.getDate();
+      
+      let nextDate = new Date(today.getFullYear(), month, day);
+      
+      // If the date passed earlier this year, the next one is next year
+      if (nextDate.getTime() < today.getTime()) {
+        nextDate.setFullYear(today.getFullYear() + 1);
+      }
+      
+      // Calculate exact days remaining
+      const diffTime = nextDate.getTime() - today.getTime();
+      const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      const cleanDateString = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}-${String(nextDate.getDate()).padStart(2, '0')}`;
+
+      return { 
+        cleanDateString,
+        originalYear: d.getFullYear(),
+        isToday: daysRemaining === 0,
+        isTomorrow: daysRemaining === 1,
+        daysRemaining
+      };
+    };
+
+    // 1. RECENT JOINERS (Sorted by newest createdAt, no 30-day limit)
+    const recentJoiners = [...employees]
+      .filter(emp => parseDateStrict(emp.createdAt)) 
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .map(emp => ({
+        id: emp.id,
+        name: emp.customerName || "Unknown",
+        role: emp.CustomerSubType || "Employee",
+        department: emp.Campaign || "Staff",
+        date: emp.createdAt, 
+        image: emp.CustomerImage
+      }));
+
+    // 2. UPCOMING BIRTHDAYS (Strictly <= 30 Days Away)
+    const upcomingBirthdays = employees
+      .map(emp => {
+        const occ = getNextOccurrence(emp.CustomerDate);
+        if (!occ) return null;
+        
+        // 🚨 THE FIX: Ignore if it's more than a month away
+        if (occ.daysRemaining > 30) return null;
+
+        return {
+          id: emp.id,
+          name: emp.customerName || "Unknown",
+          date: occ.cleanDateString,
+          isToday: occ.isToday,
+          isTomorrow: occ.isTomorrow,
+          daysRemaining: occ.daysRemaining,
+          image: emp.CustomerImage
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.daysRemaining - b.daysRemaining);
+
+    // 3. WORK ANNIVERSARIES (Strictly <= 30 Days Away)
+    const workAnniversaries = employees
+      .map(emp => {
+        const occ = getNextOccurrence(emp.createdAt);
+        if (!occ) return null;
+        
+        const years = parseInt(occ.cleanDateString.split('-')[0]) - occ.originalYear;
+        
+        // 🚨 THE FIX: Skip if under 1 year OR more than a month away
+        if (years <= 0 || occ.daysRemaining > 30) return null; 
+
+        return {
+          id: emp.id,
+          name: emp.customerName || "Unknown",
+          date: occ.cleanDateString,
+          years: years,
+          isToday: occ.isToday,
+          isTomorrow: occ.isTomorrow,
+          daysRemaining: occ.daysRemaining,
+          image: emp.CustomerImage
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.daysRemaining - b.daysRemaining);
+
+    res.status(200).json({ 
+      success: true, 
+      data: { recentJoiners, upcomingBirthdays, workAnniversaries } 
+    });
+
+  } catch (error) {
+    next(new ApiError(error.statusCode || 500, error.message));
   }
 };
 

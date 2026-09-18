@@ -38,6 +38,8 @@ import {
   archiveCustomer,
   unarchiveCustomer,
   getArchivedCustomers,
+  getEmployeeDistribution,
+  getEmployeeHighlights,
 } from "../controllers/controller.customer.js";
 
 import upload from "../config/multer.js";
@@ -62,12 +64,14 @@ customerRoutes.use(protectRoute);
 
 //dashboard routes
 customerRoutes.get("/dashboard/stats-count",getDashboardStatsCount);
+customerRoutes.get("/dashboard/distribution", getEmployeeDistribution);
 customerRoutes.get("/dashboard/lead-source-stats",getLeadSourcesStats);
 customerRoutes.get("/dashboard/lead-temperature-stats",getLeadTemperatureStats);
 customerRoutes.get("/dashboard/visiter-chart-stats",getVisitorsChartStats);
 customerRoutes.get("/dashboard/followup-chart-stats",getFollowupChartStats);
 customerRoutes.get("/dashboard/customer-location-stats",getCustomerLocationStats);
 customerRoutes.get("/dashboard/radar-chart-stats",getRadarChartStats);
+customerRoutes.get("/dashboard/employee/highlights", getEmployeeHighlights);
 
 
 //customer routes

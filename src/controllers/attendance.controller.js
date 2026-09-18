@@ -611,3 +611,136 @@ export const getEmployeeById = async (req, res, next) => {
     next(new ApiError(500, error.message));
   }
 };
+
+
+
+// analytics of attendance
+
+// ---------------------------------------------
+// GET ATTENDANCE TREND (AREA CHART DATA)
+// ---------------------------------------------
+export const getAttendanceTrend = async (req, res, next) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    if (!startDate || !endDate) {
+      throw new ApiError(400, "startDate and endDate are required");
+    }
+
+    // Optional: If you want to scope this to specific admins (RBAC)
+    // const admin = req.admin;
+    // const accessFilter = await getCustomerAccessFilter(admin);
+
+    // 1. Fetch all attendance records in the date range
+    const attendanceRecords = await prisma.customerAttendance.findMany({
+      where: {
+        dateString: { gte: startDate, lte: endDate },
+        // customer: accessFilter // Uncomment if RBAC applies
+      },
+      select: { dateString: true, status: true }
+    });
+
+    // 2. Generate a continuous array of dates between start and end
+    const getDaysArray = (start, end) => {
+      let arr = [];
+      for (let dt = new Date(start); dt <= new Date(end); dt.setDate(dt.getDate() + 1)) {
+        arr.push(new Date(dt).toISOString().split('T')[0]);
+      }
+      return arr;
+    };
+    const dateRange = getDaysArray(startDate, endDate);
+
+    // 3. Map the data into daily aggregations
+    const trendData = dateRange.map(dateStr => {
+      const dayRecords = attendanceRecords.filter(r => r.dateString === dateStr);
+      
+      let presentCount = 0;
+      let absentCount = 0;
+
+      dayRecords.forEach(r => {
+        // Group working statuses into "Present"
+        if (['present', 'half_day', 'workfromhome'].includes(r.status)) {
+          presentCount++;
+        } 
+        // Group non-working statuses into "Absent"
+        else if (['absent', 'leave'].includes(r.status)) {
+          absentCount++;
+        }
+      });
+
+      // Get Short Day Name (e.g., "Mon", "Tue")
+      const dateObj = new Date(dateStr);
+      const dayName = dateObj.toLocaleDateString('en-US', { weekday: 'short' });
+
+      return {
+        date: dateStr,
+        name: dayName,
+        Present: presentCount,
+        Absent: absentCount
+      };
+    });
+
+    res.status(200).json({ success: true, data: trendData });
+  } catch (error) {
+    next(new ApiError(error.statusCode || 500, error.message));
+  }
+};
+
+// ---------------------------------------------
+// GET ATTENDANCE OVERVIEW (DONUT CHART DATA)
+// ---------------------------------------------
+export const getAttendanceOverview = async (req, res, next) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    if (!startDate || !endDate) {
+      throw new ApiError(400, "startDate and endDate are required");
+    }
+
+    // Optional: If you want to scope this to specific admins (RBAC)
+    // const admin = req.admin;
+    // const accessFilter = await getCustomerAccessFilter(admin);
+
+    // Group the attendance records by status within the date range
+    const groupedRecords = await prisma.customerAttendance.groupBy({
+      by: ['status'],
+      _count: { id: true },
+      where: {
+        dateString: { gte: startDate, lte: endDate },
+        // customer: accessFilter // Uncomment if RBAC applies
+      }
+    });
+
+    let totalRecords = 0;
+    
+    // Format names and calculate the total
+    const formattedData = groupedRecords.map(record => {
+      totalRecords += record._count.id;
+      
+      let displayName = record.status;
+      if (displayName === 'half_day') displayName = 'Late / Half Day';
+      else if (displayName === 'workfromhome') displayName = 'Work From Home';
+      else displayName = displayName.charAt(0).toUpperCase() + displayName.slice(1); // Capitalize 'Present', 'Absent', 'Leave'
+
+      return {
+        name: displayName,
+        value: record._count.id
+      };
+    });
+
+    // Calculate percentages and sort highest to lowest
+    const finalData = formattedData.map(item => ({
+      ...item,
+      percentage: totalRecords > 0 ? Math.round((item.value / totalRecords) * 100) : 0
+    })).sort((a, b) => b.value - a.value);
+
+    res.status(200).json({
+      success: true,
+      total: totalRecords,
+      data: finalData
+    });
+
+  } catch (error) {
+    next(new ApiError(error.statusCode || 500, error.message));
+  }
+};

@@ -13,7 +13,8 @@ import {
   toggleSubTask,
   deleteSubTask,
   generateSubtasksAI,
-  assignTaskViaAI
+  assignTaskViaAI,
+  updateSubTaskStatus
 } from "../controllers/controller.task.js";
 
 const taskRoutes = express.Router();
@@ -38,6 +39,7 @@ taskRoutes.post("/admin/ai/assign", protectRoute, assignTaskViaAI);
 // Main Tasks
 taskRoutes.get("/employee", protectEmployeeRoute, getEmployeeTasks);
 taskRoutes.put("/employee/:id/status", protectEmployeeRoute, updateEmployeeTaskStatus);
+taskRoutes.put("/employee/subtask/:id/status", protectEmployeeRoute,  updateSubTaskStatus);
 
 // Subtasks
 taskRoutes.post("/employee/subtask", protectEmployeeRoute, createSubTask);

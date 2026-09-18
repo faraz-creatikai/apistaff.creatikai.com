@@ -393,7 +393,6 @@ model Task {
   id          String       @id @default(uuid())
   title       String
   description String?      @db.LongText
-  status      TaskStatus   @default(todo)
   priority    TaskPriority @default(medium)
   dueDate     DateTime?
 
@@ -414,17 +413,17 @@ model Task {
   // Indexes for fast querying on the dashboards
   @@index([assignedToId])
   @@index([createdById])
-  @@index([status])
 }
 
 // ------------------------------------------------------------------
 // SUBTASK MODEL (Created by Employee/Customer to break down work)
 // ------------------------------------------------------------------
 model SubTask {
-  id          String  @id @default(uuid())
+  id          String     @id @default(uuid())
   title       String
-  description String? @db.LongText
-  isCompleted Boolean @default(false)
+  description String?    @db.LongText
+  status      TaskStatus @default(todo)
+  isCompleted Boolean    @default(false)
 
   // Link to Parent Task
   taskId String
@@ -438,6 +437,7 @@ model SubTask {
   updatedAt DateTime @updatedAt
 
   @@index([taskId])
+  @@index([status])
 }
 
 model Schedule {
