@@ -11,6 +11,7 @@ import { deleteOldNotifications, initFollowupNotificationCron } from "./jobs/not
 import { initWhatsApp } from "./config/baileys.js";
 import { sweepOldUploads } from "./jobs/cleanupUploads.js";
 import "./jobs/attendance.js"; // ← Import the attendance job to ensure it runs
+import { initializeAiCronJobs } from "./jobs/aiLiveJob.js";
 
 
 const PORT = process.env.PORT || 5000;
@@ -27,6 +28,7 @@ server.listen(PORT, async () => {
   initInstagramCron();
   initFacebookCron();
   initFollowupNotificationCron();
+  initializeAiCronJobs();
  // await initWhatsApp();
 
   setInterval(async () => {

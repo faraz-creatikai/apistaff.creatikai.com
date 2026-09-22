@@ -1,5 +1,5 @@
 // controllers/aiAgent.controller.js
-import { productPriceCompareAgent, WebhookIntegratedAgent } from "../ai/agent.js";
+import { aiAgent, productPriceCompareAgent, WebhookIntegratedAgent } from "../ai/agent.js";
 import prisma from "../config/prismaClient.js";
 import { getAggregatedProducts } from "../jobs/searchApiService.js";
 import ApiError from "../utils/ApiError.js";
@@ -345,5 +345,149 @@ export const compareProductPrice = async (req, res, next) => {
 
   } catch (error) {
     return next(new ApiError(500, error.message));
+  }
+};
+
+
+
+
+// crm personal agent 
+
+export const getDailyAIReports = async (req, res, next) => {
+  try {
+    const reports = await prisma.dailyAIReport.findMany({
+      orderBy: { reportDate: 'desc' }
+    });
+
+    res.status(200).json({ 
+      success: true, 
+      data: reports 
+    });
+  } catch (error) {
+    next(new ApiError(error.statusCode || 500, "Failed to fetch AI reports"));
+  }
+};
+
+
+
+// Helper to determine who is making the request based on your middlewares
+const getUserRelation = (req) => {
+  if (req.admin) return { adminId: req.admin.id, userType: "admin", userId: req.admin.id };
+  if (req.employee) return { customerId: req.employee.id, userType: "employee", userId: req.employee.id };
+  throw new Error("Unauthorized context");
+};
+
+// 1. Send Message / Talk to AI
+export const handleAiChat = async (req, res) => {
+  try {
+    const { message, sessionId } = req.body; // Receive optional sessionId from frontend
+    if (!message) return res.status(400).json({ success: false, message: "Message is required" });
+
+    const { userId, userType } = getUserRelation(req);
+
+    // Call updated agent service
+    const aiResponse = await aiAgent.handleChat(userId, userType, message, sessionId);
+
+    return res.status(200).json({
+      success: true,
+      data: aiResponse // Returns { text, sessionId }
+    });
+  } catch (error) {
+    console.error("AI Chat Error:", error);
+    return res.status(500).json({ success: false, message: "Agent failed to respond." });
+  }
+};
+
+// 2. Get All Chat Sessions for Sidebar
+export const getChatSessions = async (req, res) => {
+  try {
+    const { adminId, customerId } = getUserRelation(req);
+    const dbQuery = adminId ? { adminId } : { customerId };
+
+    const sessions = await prisma.agentChatSession.findMany({
+      where: dbQuery,
+      orderBy: [
+        { isPinned: 'desc' }, // Pinned at the top
+        { updatedAt: 'desc' } // Then most recent
+      ],
+      select: { id: true, title: true, isPinned: true, updatedAt: true }
+    });
+
+    return res.status(200).json({ success: true, data: sessions });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Failed to fetch sessions" });
+  }
+};
+
+// 3. Get Messages for a specific Session
+export const getSessionMessages = async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { adminId, customerId } = getUserRelation(req);
+    const dbQuery = adminId ? { adminId } : { customerId };
+
+    // Security check: Ensure the session belongs to this user
+    const session = await prisma.agentChatSession.findFirst({
+      where: { id: sessionId, ...dbQuery }
+    });
+
+    if (!session) return res.status(404).json({ success: false, message: "Session not found" });
+
+    const messages = await prisma.agentChatHistory.findMany({
+      where: { sessionId },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, role: true, content: true, createdAt: true }
+    });
+
+    return res.status(200).json({ success: true, data: messages });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Failed to fetch messages" });
+  }
+};
+
+// 4. Toggle Pin Status
+export const toggleSessionPin = async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { adminId, customerId } = getUserRelation(req);
+    const dbQuery = adminId ? { adminId } : { customerId };
+
+    const session = await prisma.agentChatSession.findFirst({
+      where: { id: sessionId, ...dbQuery }
+    });
+
+    if (!session) return res.status(404).json({ success: false, message: "Session not found" });
+
+    const updated = await prisma.agentChatSession.update({
+      where: { id: sessionId },
+      data: { isPinned: !session.isPinned }
+    });
+
+    return res.status(200).json({ success: true, data: updated });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Failed to pin session" });
+  }
+};
+
+// 5. Delete Session (And all its messages via Cascade)
+export const deleteSession = async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { adminId, customerId } = getUserRelation(req);
+    const dbQuery = adminId ? { adminId } : { customerId };
+
+    const session = await prisma.agentChatSession.findFirst({
+      where: { id: sessionId, ...dbQuery }
+    });
+
+    if (!session) return res.status(404).json({ success: false, message: "Session not found" });
+
+    await prisma.agentChatSession.delete({
+      where: { id: sessionId }
+    });
+
+    return res.status(200).json({ success: true, message: "Session deleted" });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Failed to delete session" });
   }
 };

@@ -3,7 +3,9 @@ import { getDynamicAIContext } from "../config/aiClientFactory.js";
 import { BRAND } from "../config/brand.js";
 import { gemini } from "../config/gemini.js";
 import { openai } from "../config/openai.js";
+import prisma from "../config/prismaClient.js";
 import { fetchTabblyAgentPrompt } from "../controllers/controller.tabbly.js";
+import { agentToolsDefinitions, agentToolsHandlers } from "../jobs/aiTools.js";
 import { countSpokenWords } from "../jobs/ttsService.js";
 import { buildCallingAgentSystemPrompt, callingAgentSystemPrompt } from "./prompts/callingAgentPrompt.js";
 import { dataminingPrompt, miningDataPrompt } from "./prompts/dataminingAgentPrompt.js";
@@ -820,3 +822,398 @@ export async function TaskGenerationAgent(adminPrompt, employeeContext = {}) {
     executionSummary: normalizeExecutionSummary(parsed.executionSummary),
   };
 }
+
+
+// ---------------------------------------------------------
+// AGENT 1: MICRO-QA (Subtask Verification)
+// ---------------------------------------------------------
+export async function SubTaskVerificationAgent(subTask, submittedProof, systemCheck) {
+  const { client, model, provider } = await getDynamicAIContext("GEMINI", "models/gemini-2.5-flash");
+  
+  const prompt = `
+    You are a reasonable and context-aware QA Engineering Manager evaluating a single step of a workflow.
+    
+    SUBTASK TITLE: "${subTask.title}"
+    ADMIN INSTRUCTIONS: "${subTask.description || 'None provided'}"
+    EXPECTED PROOF DEFINITION: "${subTask.expectedProof || 'Any valid evidence, link, or detailed textual explanation'}"
+    
+    EMPLOYEE SUBMISSION: "${submittedProof}"
+    SYSTEM AUTOMATED CHECK: "${systemCheck}"
+    
+    RULES:
+    1. Evaluate if the Employee Submission reasonably fulfills the Subtask Title and Instructions.
+    2. ACCEPT DETAILED TEXT: If the employee cannot provide a link but provides specific, credible context (e.g., naming tools like Dribbble/Figma, explaining a design choice, detailing a local setup, or explaining a system limitation), ACCEPT IT as valid proof.
+    3. REJECT ONLY IF:
+       - The submission is entirely lazy or vague (e.g., "done", "I did it", "ok") with zero context.
+       - The "Expected Proof Definition" explicitly demands a specific URL format, and the employee completely ignored it without a valid technical excuse.
+    4. If the System Automated Check reports a hard failure on a provided URL (e.g., 404), reject it.
+    
+    Respond ONLY with a valid JSON object in this exact format:
+    {
+      "isVerified": boolean,
+      "feedback": "string (Short, encouraging feedback if approved. If rejected, explain exactly what specific detail or artifact is missing)"
+    }
+  `;
+
+  const raw = await executeDynamicPrompt(client, model, provider, prompt);
+  
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("Invalid AI response format.");
+  
+  return safeJsonParse(jsonMatch[0]);
+}
+
+// ---------------------------------------------------------
+// AGENT 2: MACRO-QA (Final Task Gatekeeper)
+// ---------------------------------------------------------
+export async function TaskMacroReviewAgent(taskData) {
+  const { client, model, provider } = await getDynamicAIContext("GEMINI", "models/gemini-2.5-flash");
+
+  const prompt = `
+    You are a strict QA Executive Manager reviewing a completed task.
+    All individual subtasks have been verified, but you must evaluate the overall execution.
+    
+    TASK OBJECTIVE: "${taskData.title}"
+    ADMIN INSTRUCTIONS: "${taskData.description || 'None'}"
+    
+    SUBTASKS COMPLETED:
+    ${JSON.stringify(taskData.subTasks.map(st => ({ 
+      title: st.title, 
+      proof: st.submittedProof 
+    })))}
+    
+    RULES:
+    1. Does the combined execution of these subtasks successfully fulfill the main Task Objective?
+    2. Is there anything highly subjective that requires a human admin to verify? (Set requiresHumanQA to true if so).
+    
+    Respond ONLY with a valid JSON object in this exact format:
+    {
+      "approved": boolean,
+      "score": number (0 to 100),
+      "summary": "string (Executive summary for the Admin detailing how the task was executed)",
+      "requiresHumanQA": boolean
+    }
+  `;
+
+  const raw = await executeDynamicPrompt(client, model, provider, prompt);
+  
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("Invalid AI response format.");
+  
+  return safeJsonParse(jsonMatch[0]);
+}
+
+
+
+
+
+
+
+
+
+
+// Helper to get YYYY-MM-DD for attendance queries
+const getDateString = (dateObj) => {
+  const year = dateObj.getFullYear();
+  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const day = String(dateObj.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+class CRM_AIAgent {
+  constructor() {
+    this.name = "CreatikAI Core Agent";
+  }
+
+  // -------------------------------------------------------------
+  // SKILL 1: Evening Operations Summary (Unchanged)
+  // -------------------------------------------------------------
+  async generateEveningTaskSummary() {
+    console.log(`[${this.name}] Starting Evening Task Summary...`);
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = getDateString(today);
+
+    const todaysTasks = await prisma.task.findMany({
+      where: {
+        OR: [
+          { updatedAt: { gte: today } },
+          { subTasks: { some: { updatedAt: { gte: today } } } }
+        ]
+      },
+      include: {
+        assignedTo: { select: { customerName: true, City: true, Campaign: true } },
+        subTasks: { select: { title: true, status: true, isCompleted: true, updatedAt: true } }
+      }
+    });
+
+    const todaysAttendance = await prisma.customerAttendance.findMany({
+      where: { dateString: todayStr },
+      include: { customer: { select: { customerName: true } } }
+    });
+
+    if (todaysTasks.length === 0 && todaysAttendance.length === 0) return;
+
+    const { client, model, provider } = await getDynamicAIContext("GEMINI", "gemini-2.5-flash");
+    
+    const prompt = `
+      You are the elite Operations Manager for CreatikAI.
+      Review the JSON data containing today's Task Updates and Attendance Logs.
+
+      CRITICAL RULES:
+      1. NEVER USE RAW IDs. ALWAYS use the actual 'customerName'.
+      2. Cross-reference attendance with productivity.
+      3. YOU MUST RETURN ONLY VALID JSON. Do not include markdown formatting or backticks outside the JSON.
+
+      EXPECTED JSON SCHEMA:
+      {
+        "executiveSummary": "1-2 sentences summarizing today's overall productivity and staff attendance",
+        "attendanceAndWorkforce": ["Bullet point 1 about attendance", "Bullet point 2..."],
+        "taskHighlights": ["Bullet point 1 about completed tasks citing employee names", "..."],
+        "blockersAndAlerts": ["Bullet point 1 about stuck tasks or absent employees", "..."],
+        "employeeSpotlight": "Name of top performer and 1 sentence why"
+      }
+
+      RAW DATA:
+      TASKS: ${JSON.stringify(todaysTasks)}
+      ATTENDANCE: ${JSON.stringify(todaysAttendance)}
+    `;
+
+    let reportContent = await executeDynamicPrompt(client, model, provider, prompt);
+    reportContent = reportContent.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+    await prisma.dailyAIReport.create({
+      data: { type: "evening_summary", content: reportContent }
+    });
+    console.log(`[${this.name}] Evening Task & Attendance Summary Generated!`);
+  }
+
+  // -------------------------------------------------------------
+  // SKILL 2: Morning Briefing (Unchanged)
+  // -------------------------------------------------------------
+  async generateMorningBrief() {
+    console.log(`[${this.name}] Starting Morning Brief...`);
+    
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(0, 0, 0, 0);
+    const yesterdayStr = getDateString(yesterday);
+
+    const pendingTasks = await prisma.task.findMany({
+      where: { status: { not: "completed" } },
+      include: {
+        assignedTo: { select: { customerName: true } },
+        subTasks: { where: { isCompleted: false }, select: { title: true } }
+      }
+    });
+
+    const yesterdayAttendance = await prisma.customerAttendance.findMany({
+      where: { dateString: yesterdayStr, status: { in: ['absent', 'leave'] } },
+      include: { customer: { select: { customerName: true } } }
+    });
+
+    if (pendingTasks.length === 0) return;
+
+    const { client, model, provider } = await getDynamicAIContext("GEMINI", "gemini-2.5-flash");
+    
+    const prompt = `
+      You are the elite Operations Manager for CreatikAI.
+      Generate a morning plan based on pending tasks and yesterday's absences.
+
+      CRITICAL RULES:
+      1. NEVER USE RAW IDs. ALWAYS use the 'customerName'.
+      2. YOU MUST RETURN ONLY VALID JSON. Do not include markdown formatting or backticks outside the JSON.
+
+      EXPECTED JSON SCHEMA:
+      {
+        "morningFocus": "A brief motivational directive",
+        "priorityActionItems": ["Critical pending task 1 assigned to Employee Name", "Task 2..."],
+        "carryoverAlerts": ["Alert 1 regarding tasks delayed due to absence", "..."]
+      }
+
+      RAW DATA:
+      PENDING TASKS: ${JSON.stringify(pendingTasks)}
+      YESTERDAY'S ABSENCES: ${JSON.stringify(yesterdayAttendance)}
+    `;
+
+    let reportContent = await executeDynamicPrompt(client, model, provider, prompt);
+    reportContent = reportContent.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+    await prisma.dailyAIReport.create({
+      data: { type: "morning_brief", content: reportContent }
+    });
+    console.log(`[${this.name}] Morning Brief Generated!`);
+  }
+
+  // -------------------------------------------------------------
+  // SKILL 3: Conversational Tool-Calling Chatbot (FIXED FOR NEW @google/genai SDK)
+  // -------------------------------------------------------------
+  async handleChat(userId, userType, message, sessionId = null) {
+    console.log(`[${this.name}] Processing chat for ${userType}...`);
+
+    let userContext = "";
+    let dbQuery = {};
+
+    if (userType === "admin") {
+      const admin = await prisma.admin.findUnique({ where: { id: userId } });
+      userContext = `You are talking to an Admin named ${admin.name}. You have full clearance to perform actions on their behalf.`;
+      dbQuery = { adminId: userId };
+    } else {
+      const employee = await prisma.customer.findUnique({ where: { id: userId } });
+      userContext = `You are talking to an Employee named ${employee.customerName}. Answer their questions but keep responses restricted to their own tasks.`;
+      dbQuery = { customerId: userId };
+    }
+
+    let activeSessionId = sessionId;
+    if (!activeSessionId) {
+      const generatedTitle = message.split(" ").slice(0, 5).join(" ") + "...";
+      const newSession = await prisma.agentChatSession.create({
+        data: { title: generatedTitle, ...dbQuery }
+      });
+      activeSessionId = newSession.id;
+    } else {
+      await prisma.agentChatSession.update({
+        where: { id: activeSessionId },
+        data: { updatedAt: new Date() }
+      });
+    }
+
+    const historyLogs = await prisma.agentChatHistory.findMany({
+      where: { sessionId: activeSessionId },
+      orderBy: { createdAt: 'asc' },
+      take: 20
+    });
+
+    await prisma.agentChatHistory.create({
+      data: { role: "user", content: message, sessionId: activeSessionId }
+    });
+
+    // 1. Get dynamically resolved client
+    const { client, model, provider } = await getDynamicAIContext("GEMINI", "gemini-2.5-flash");
+    const systemInstruction = `You are the CreatikAI Core Agent, a highly capable CRM assistant.\n\n${userContext}\n\nCurrent Time: ${new Date().toLocaleString()}.\nIf the user asks you to perform an action or check data, use the tools available to you. Format your final answers cleanly.`;
+
+    let responseText = "";
+
+    // ==========================================
+    // GEMINI IMPLEMENTATION (Using @google/genai)
+    // ==========================================
+    if (provider === "GEMINI") {
+      // Map DB history to the exact format the new Gemini SDK expects for multi-turn chats
+      const chatHistory = historyLogs.map(log => ({
+        role: log.role === 'model' || log.role === 'function' ? 'model' : 'user',
+        parts: [{ text: log.content }]
+      }));
+
+      // Initialize the multi-turn chat session using the new client.chats
+      const chat = client.chats.create({
+        model: model,
+        config: {
+          systemInstruction: systemInstruction,
+          tools: [{ functionDeclarations: agentToolsDefinitions }],
+        },
+        history: chatHistory
+      });
+
+      // Send the message
+      let result = await chat.sendMessage({ message: message });
+      
+      // Handle tool calls in the new SDK
+      if (result.functionCalls && result.functionCalls.length > 0) {
+        const call = result.functionCalls[0];
+        console.log(`[${this.name}] Executing Gemini Action: ${call.name}`);
+        
+        // Execute your local tool logic
+        const apiResponse = await agentToolsHandlers[call.name](call.args);
+        
+        // Send the function result back to Gemini so it can generate a final response
+        result = await chat.sendMessage({
+          message: [{
+            functionResponse: {
+              name: call.name,
+              response: apiResponse
+            }
+          }]
+        });
+      }
+
+      responseText = result.text;
+    } 
+    // ==========================================
+    // OPENAI / GROQ IMPLEMENTATION
+    // ==========================================
+    else if (provider === "OPENAI" || provider === "GROQ") {
+      
+      // OpenAI/Groq history mapping
+      const chatHistory = historyLogs.map(log => ({
+        role: log.role === 'model' || log.role === 'function' ? 'assistant' : 'user',
+        content: log.content
+      }));
+
+      // OpenAI/Groq Tool definitions map cleanly from Gemini, but require slight restructuring
+      const tools = agentToolsDefinitions.map(tool => ({
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters
+        }
+      }));
+
+      const messages = [
+        { role: "system", content: systemInstruction },
+        ...chatHistory,
+        { role: "user", content: message }
+      ];
+
+      const response = await client.chat.completions.create({
+        model: model,
+        messages: messages,
+        tools: tools,
+        tool_choice: "auto",
+      });
+
+      const responseMessage = response.choices[0].message;
+
+      // Handle OpenAI tool calls
+      if (responseMessage.tool_calls) {
+        messages.push(responseMessage); // Add the assistant's tool call request to history
+
+        for (const toolCall of responseMessage.tool_calls) {
+          console.log(`[${this.name}] Executing ${provider} Action: ${toolCall.function.name}`);
+          const functionArgs = JSON.parse(toolCall.function.arguments);
+          const apiResponse = await agentToolsHandlers[toolCall.function.name](functionArgs);
+          
+          messages.push({
+            tool_call_id: toolCall.id,
+            role: "tool",
+            name: toolCall.function.name,
+            content: JSON.stringify(apiResponse),
+          });
+        }
+
+        // Get final response after executing tools
+        const finalResponse = await client.chat.completions.create({
+          model: model,
+          messages: messages,
+        });
+
+        responseText = finalResponse.choices[0].message.content;
+      } else {
+        responseText = responseMessage.content;
+      }
+    }
+
+    // Save final response
+    await prisma.agentChatHistory.create({
+      data: { role: "model", content: responseText, sessionId: activeSessionId }
+    });
+
+    return {
+      text: responseText,
+      sessionId: activeSessionId
+    };
+  }
+}
+
+export const aiAgent = new CRM_AIAgent();

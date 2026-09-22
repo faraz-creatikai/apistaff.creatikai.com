@@ -102,4 +102,5 @@ adminRoutes.post("/generate-crm-api-key", protectRoute,isAdministrator, generate
 adminRoutes.delete("/crm-api-key/:keyId", protectRoute,isAdministrator, deleteApiKey);
 
 
+
 export default adminRoutes;

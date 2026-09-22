@@ -14,7 +14,9 @@ import {
   deleteSubTask,
   generateSubtasksAI,
   assignTaskViaAI,
-  updateSubTaskStatus
+  updateSubTaskStatus,
+  submitTaskForMacroReview,
+  verifySubTask
 } from "../controllers/controller.task.js";
 
 const taskRoutes = express.Router();
@@ -45,5 +47,8 @@ taskRoutes.put("/employee/subtask/:id/status", protectEmployeeRoute,  updateSubT
 taskRoutes.post("/employee/subtask", protectEmployeeRoute, createSubTask);
 taskRoutes.put("/employee/subtask/:id", protectEmployeeRoute, toggleSubTask);
 taskRoutes.delete("/employee/subtask/:id", protectEmployeeRoute, deleteSubTask);
+
+taskRoutes.put("/employee/:id/submit-review", protectEmployeeRoute, submitTaskForMacroReview);
+taskRoutes.put("/employee/subtask/:id/verify", protectEmployeeRoute, verifySubTask);
 
 export default taskRoutes;

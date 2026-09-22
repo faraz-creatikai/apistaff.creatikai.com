@@ -1,4 +1,4 @@
-import { SubtaskGenerationAgent, TaskGenerationAgent } from "../ai/agent.js";
+import { SubtaskGenerationAgent, SubTaskVerificationAgent, TaskGenerationAgent, TaskMacroReviewAgent } from "../ai/agent.js";
 import prisma from "../config/prismaClient.js";
 import ApiError from "../utils/ApiError.js";
 import { getCustomerAccessFilter } from "./controller.customer.js"; // RESTORED IMPORT
@@ -474,3 +474,141 @@ export const assignTaskViaAI = async (req, res, next) => {
     next(new ApiError(error.statusCode || 500, error.message));
   }
 };
+
+
+
+
+// ---------------------------------------------------------
+// MICRO-QA CONTROLLER: Verify a specific step
+// ---------------------------------------------------------
+
+export const verifySubTask = async (req, res, next) => {
+  try {
+    // FIXED: Extract 'id' to match the route definition '/employee/subtask/:id/verify'
+    const { id } = req.params; 
+    const { submittedProof } = req.body;
+
+    if (!submittedProof || submittedProof.trim() === "") {
+      return next(new ApiError(400, "Submitted proof is required"));
+    }
+
+    // FIXED: Use 'id' here
+    const subTask = await prisma.subTask.findUnique({ where: { id } });
+    if (!subTask) return next(new ApiError(404, "SubTask not found"));
+
+    // 1. Gather System Context (The Automated Investigator)
+    let systemCheck = "No automated system check performed.";
+    
+    // Quick automated ping if the proof contains a URL
+    const urlMatch = submittedProof.match(/https?:\/\/[^\s]+/);
+    if (urlMatch) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4000); 
+        
+        const check = await fetch(urlMatch[0], { method: 'HEAD', signal: controller.signal });
+        clearTimeout(timeoutId);
+        
+        systemCheck = `System pinged URL (${urlMatch[0]}). Returned HTTP Status: ${check.status}`;
+      } catch (e) {
+        systemCheck = `System pinged URL (${urlMatch[0]}). Failed to resolve or timed out.`;
+      }
+    }
+
+    // 2. Call the Micro-QA Agent
+    const aiJudgment = await SubTaskVerificationAgent(subTask, submittedProof, systemCheck);
+
+    // 3. Update the Database
+    // FIXED: Use 'id' here
+    const updatedSubTask = await prisma.subTask.update({
+      where: { id },
+      data: {
+        submittedProof: submittedProof,
+        isAiVerified: aiJudgment.isVerified,
+        isCompleted: aiJudgment.isVerified, // Auto-complete if verified
+        aiFeedback: aiJudgment.isVerified ? null : aiJudgment.feedback
+      }
+    });
+
+    res.status(200).json({ 
+      success: true, 
+      message: aiJudgment.isVerified ? "Step verified!" : "Step rejected.",
+      data: updatedSubTask 
+    });
+
+  } catch (error) {
+    next(new ApiError(500, error.message));
+  }
+};
+
+// ---------------------------------------------------------
+// MACRO-QA CONTROLLER: Final Task Submission
+// ---------------------------------------------------------
+export const submitTaskForMacroReview = async (req, res, next) => {
+  try {
+    const { taskId } = req.params;
+
+    const task = await prisma.task.findUnique({
+      where: { id: taskId },
+      include: { 
+        subTasks: true,
+        reviewLogs: true 
+      }
+    });
+
+    if (!task) return next(new ApiError(404, "Task not found"));
+
+    // 1. Hard Blocker: Ensure all subtasks are verified
+    const unverifiedSubtasks = task.subTasks.filter(st => !st.isAiVerified);
+    if (unverifiedSubtasks.length > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Cannot submit. ${unverifiedSubtasks.length} step(s) still require AI verification.` 
+      });
+    }
+
+    // 2. Call the Macro-QA Agent
+    const aiJudgment = await TaskMacroReviewAgent(task);
+
+    // 3. Log the attempt & Update Task status in a transaction
+    const attemptNumber = task.reviewLogs.length + 1;
+    const finalStatus = aiJudgment.approved ? "completed" : "in_progress";
+
+    const [reviewLog, updatedTask] = await prisma.$transaction([
+      prisma.taskReviewLog.create({
+        data: {
+          taskId,
+          attemptNumber,
+          aiJudgment: aiJudgment.approved ? "APPROVED" : "REJECTED",
+          aiScore: aiJudgment.score,
+          aiFeedback: aiJudgment.summary,
+          snapshotData: task.subTasks // Archive exactly what they submitted
+        }
+      }),
+      prisma.task.update({
+        where: { id: taskId },
+        data: {
+          status: finalStatus,
+          aiConfidenceScore: aiJudgment.score,
+          aiSummary: aiJudgment.summary,
+          requiresHumanQA: aiJudgment.requiresHumanQA
+        }
+      })
+    ]);
+
+    res.status(200).json({ 
+      success: true, 
+      message: aiJudgment.approved ? "Task approved and completed." : "Task requires revision.",
+      data: {
+        status: updatedTask.status,
+        aiSummary: updatedTask.aiSummary,
+        aiConfidenceScore: updatedTask.aiConfidenceScore
+      }
+    });
+
+  } catch (error) {
+    next(new ApiError(500, error.message));
+  }
+};
+
+
