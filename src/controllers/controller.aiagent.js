@@ -395,12 +395,19 @@ export const handleAiChat = async (req, res) => {
   } catch (error) {
     console.error("AI Chat Error:", error);
 
-    // 1. Detect Google Gemini 429 Rate / Quota Limit
+    // Bulletproof error parsing
+    let errStr = "";
+    try { errStr = JSON.stringify(error); } catch(e){}
+    const msgStr = typeof error.message === 'string' ? error.message : "";
+
+    // Detect Google Gemini 429 Rate / Quota Limit safely
     const isQuotaError = 
       error.status === 429 || 
-      error.message?.includes("429") || 
-      error.message?.includes("RESOURCE_EXHAUSTED") ||
-      error.message?.includes("Quota exceeded");
+      msgStr.includes("429") || 
+      msgStr.includes("RESOURCE_EXHAUSTED") ||
+      msgStr.includes("Quota exceeded") ||
+      errStr.includes("429") ||
+      errStr.includes("Quota exceeded");
 
     if (isQuotaError) {
       return res.status(429).json({
@@ -410,11 +417,11 @@ export const handleAiChat = async (req, res) => {
       });
     }
 
-    // 2. Standard internal server error
+    // Standard internal server error
     return res.status(500).json({
       success: false,
       errorType: "INTERNAL_ERROR",
-      message: error.message || "Internal server error occurred while processing AI chat.",
+      message: msgStr || "Internal server error occurred while processing AI chat.",
     });
   }
 };
