@@ -394,7 +394,28 @@ export const handleAiChat = async (req, res) => {
     });
   } catch (error) {
     console.error("AI Chat Error:", error);
-    return res.status(500).json({ success: false, message: "Agent failed to respond." });
+
+    // 1. Detect Google Gemini 429 Rate / Quota Limit
+    const isQuotaError = 
+      error.status === 429 || 
+      error.message?.includes("429") || 
+      error.message?.includes("RESOURCE_EXHAUSTED") ||
+      error.message?.includes("Quota exceeded");
+
+    if (isQuotaError) {
+      return res.status(429).json({
+        success: false,
+        errorType: "QUOTA_EXCEEDED",
+        message: "Gemini API Quota Exceeded: Free tier limit (20 requests/day for gemini-2.5-flash) has been reached. Please wait ~50s or attach a paid API key.",
+      });
+    }
+
+    // 2. Standard internal server error
+    return res.status(500).json({
+      success: false,
+      errorType: "INTERNAL_ERROR",
+      message: error.message || "Internal server error occurred while processing AI chat.",
+    });
   }
 };
 
