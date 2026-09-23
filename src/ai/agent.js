@@ -910,7 +910,32 @@ export async function TaskMacroReviewAgent(taskData) {
 
 
 
-
+// Helper to convert Gemini's uppercase types to standard lowercase JSON Schema (for Groq/OpenAI)
+const convertSchemaToStandardJSON = (schema) => {
+  if (!schema || typeof schema !== 'object') return schema;
+  const newSchema = { ...schema };
+  
+  // Convert type to lowercase (e.g., "OBJECT" -> "object")
+  if (typeof newSchema.type === 'string') {
+    newSchema.type = newSchema.type.toLowerCase();
+  }
+  
+  // Recursively convert nested properties
+  if (newSchema.properties) {
+    const newProps = {};
+    for (const key in newSchema.properties) {
+      newProps[key] = convertSchemaToStandardJSON(newSchema.properties[key]);
+    }
+    newSchema.properties = newProps;
+  }
+  
+  // Recursively convert arrays
+  if (newSchema.items) {
+    newSchema.items = convertSchemaToStandardJSON(newSchema.items);
+  }
+  
+  return newSchema;
+};
 
 // Helper to get YYYY-MM-DD for attendance queries
 const getDateString = (dateObj) => {
@@ -1139,7 +1164,7 @@ class CRM_AIAgent {
 
       responseText = result.text;
     } 
-    // ==========================================
+// ==========================================
     // OPENAI / GROQ IMPLEMENTATION
     // ==========================================
     else if (provider === "OPENAI" || provider === "GROQ") {
@@ -1150,13 +1175,13 @@ class CRM_AIAgent {
         content: log.content
       }));
 
-      // OpenAI/Groq Tool definitions map cleanly from Gemini, but require slight restructuring
+      // FIX: Cleanly map Gemini's uppercase parameters to lowercase JSON Schema
       const tools = agentToolsDefinitions.map(tool => ({
         type: "function",
         function: {
           name: tool.name,
           description: tool.description,
-          parameters: tool.parameters
+          parameters: convertSchemaToStandardJSON(tool.parameters) // <-- Fix applied here
         }
       }));
 
@@ -1175,7 +1200,7 @@ class CRM_AIAgent {
 
       const responseMessage = response.choices[0].message;
 
-      // Handle OpenAI tool calls
+      // Handle OpenAI/Groq tool calls
       if (responseMessage.tool_calls) {
         messages.push(responseMessage); // Add the assistant's tool call request to history
 
