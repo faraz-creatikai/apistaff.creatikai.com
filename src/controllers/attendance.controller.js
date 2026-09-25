@@ -248,7 +248,7 @@ export const clockIn = async (req, res, next) => {
     // RULE: If starting after 2:00 PM (14:00), mark as half_day
     const currentHour = now.getHours();
     let initialStatus = "present";
-    if (currentHour >= 14) {
+    if (currentHour >= 12.5) {
       initialStatus = "half_day";
     }
 
@@ -341,10 +341,10 @@ export const adminUpdateAttendance = async (req, res, next) => {
       const diffMs = new Date(clockOut).getTime() - new Date(clockIn).getTime();
       calculatedMinutes = Math.max(0, Math.floor(diffMs / 60000));
 
-      if (finalStatus === "present" && calculatedMinutes < 300) {
+      if (finalStatus === "present" && calculatedMinutes < 360) {
         finalStatus = "half_day";
       }
-      else if (finalStatus === "half_day" && calculatedMinutes > 300){
+      else if (finalStatus === "half_day" && calculatedMinutes > 360) {
         finalStatus = "present"
       }
     }
