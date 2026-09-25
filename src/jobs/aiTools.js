@@ -210,7 +210,7 @@ export const agentToolsHandlers = {
 
       return {
         employeeName: employee.customerName,
-        campaign: employee.Campaign,
+        department: employee.Campaign,
         macroMetrics: {
           totalAssigned: totalTasks,
           completed: completedTasks,

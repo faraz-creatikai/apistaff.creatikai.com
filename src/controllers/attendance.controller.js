@@ -336,9 +336,14 @@ export const adminUpdateAttendance = async (req, res, next) => {
     }
 
     let calculatedMinutes = 0;
+     let finalStatus = status;
     if (clockIn && clockOut) {
       const diffMs = new Date(clockOut).getTime() - new Date(clockIn).getTime();
       calculatedMinutes = Math.max(0, Math.floor(diffMs / 60000));
+
+        if (finalStatus === "present" && calculatedMinutes < 300) {
+        finalStatus = "half_day";
+      }
     }
 
     // Upsert means: Update if exists, Create if it doesn't exist
@@ -350,7 +355,7 @@ export const adminUpdateAttendance = async (req, res, next) => {
         }
       },
       update: {
-        status,
+         status: finalStatus,
         clockIn: clockIn ? new Date(clockIn) : null,
         clockOut: clockOut ? new Date(clockOut) : null,
         totalMinutes: calculatedMinutes,
@@ -360,7 +365,7 @@ export const adminUpdateAttendance = async (req, res, next) => {
       create: {
         customerId: employeeId,
         dateString,
-        status,
+        status: finalStatus,
         clockIn: clockIn ? new Date(clockIn) : null,
         clockOut: clockOut ? new Date(clockOut) : null,
         totalMinutes: calculatedMinutes,
