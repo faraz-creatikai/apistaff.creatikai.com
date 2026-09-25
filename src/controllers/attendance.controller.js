@@ -44,30 +44,30 @@ const transformCustomer = async (c, admin = null) => {
     assignToDoc,
     createdByDoc,
   ] = await Promise.all([
-   /*  prisma.campaign.findFirst({
-      where: { Name: c.Campaign },
-      select: { id: true, Name: true },
-    }),
-    prisma.type.findFirst({
-      where: { Name: c.CustomerType },
-      select: { id: true, Name: true },
-    }),
-    prisma.subType.findFirst({
-      where: { Name: c.CustomerSubType },
-      select: { id: true, Name: true },
-    }),
-    prisma.city.findFirst({
-      where: { Name: c.City },
-      select: { id: true, Name: true },
-    }),
-    prisma.location.findFirst({
-      where: { Name: c.Location },
-      select: { id: true, Name: true },
-    }),
-    prisma.subLocation.findFirst({
-      where: { Name: c.SubLocation },
-      select: { id: true, Name: true },
-    }), */
+    /*  prisma.campaign.findFirst({
+       where: { Name: c.Campaign },
+       select: { id: true, Name: true },
+     }),
+     prisma.type.findFirst({
+       where: { Name: c.CustomerType },
+       select: { id: true, Name: true },
+     }),
+     prisma.subType.findFirst({
+       where: { Name: c.CustomerSubType },
+       select: { id: true, Name: true },
+     }),
+     prisma.city.findFirst({
+       where: { Name: c.City },
+       select: { id: true, Name: true },
+     }),
+     prisma.location.findFirst({
+       where: { Name: c.Location },
+       select: { id: true, Name: true },
+     }),
+     prisma.subLocation.findFirst({
+       where: { Name: c.SubLocation },
+       select: { id: true, Name: true },
+     }), */
     c.AssignToId
       ? prisma.admin.findUnique({
         where: { id: c.AssignToId },
@@ -84,29 +84,29 @@ const transformCustomer = async (c, admin = null) => {
 
   return {
     ...base,
-  /*   Campaign: campaignDoc
-      ? { _id: campaignDoc.id, Name: campaignDoc.Name }
-      : { _id: null, Name: c.Campaign || "" },
-
-    CustomerType: typeDoc
-      ? { _id: typeDoc.id, Name: typeDoc.Name }
-      : { _id: null, Name: c.CustomerType || "" },
-
-    CustomerSubType: subTypeDoc
-      ? { _id: subTypeDoc.id, Name: subTypeDoc.Name }
-      : { _id: null, Name: c.CustomerSubType || "" },
-
-    City: cityDoc
-      ? { _id: cityDoc.id, Name: cityDoc.Name }
-      : { _id: null, Name: c.City || "" },
-
-    Location: locationDoc
-      ? { _id: locationDoc.id, Name: locationDoc.Name }
-      : { _id: null, Name: c.Location || "" },
-
-    SubLocation: subLocationDoc
-      ? { _id: subLocationDoc.id, Name: subLocationDoc.Name }
-      : { _id: null, Name: c.SubLocation || "" }, */
+    /*   Campaign: campaignDoc
+        ? { _id: campaignDoc.id, Name: campaignDoc.Name }
+        : { _id: null, Name: c.Campaign || "" },
+  
+      CustomerType: typeDoc
+        ? { _id: typeDoc.id, Name: typeDoc.Name }
+        : { _id: null, Name: c.CustomerType || "" },
+  
+      CustomerSubType: subTypeDoc
+        ? { _id: subTypeDoc.id, Name: subTypeDoc.Name }
+        : { _id: null, Name: c.CustomerSubType || "" },
+  
+      City: cityDoc
+        ? { _id: cityDoc.id, Name: cityDoc.Name }
+        : { _id: null, Name: c.City || "" },
+  
+      Location: locationDoc
+        ? { _id: locationDoc.id, Name: locationDoc.Name }
+        : { _id: null, Name: c.Location || "" },
+  
+      SubLocation: subLocationDoc
+        ? { _id: subLocationDoc.id, Name: subLocationDoc.Name }
+        : { _id: null, Name: c.SubLocation || "" }, */
 
     AssignTo: assignToDoc
       ? {
@@ -214,7 +214,7 @@ export const employeeLogout = async (req, res, next) => {
       httpOnly: true,
       expires: new Date(0), // Instantly expires the cookie
     });
-    
+
     res.status(200).json({ success: true, message: "Logged out successfully" });
   } catch (error) {
     next(new ApiError(error.statusCode || 500, error.message));
@@ -336,13 +336,16 @@ export const adminUpdateAttendance = async (req, res, next) => {
     }
 
     let calculatedMinutes = 0;
-     let finalStatus = status;
+    let finalStatus = status;
     if (clockIn && clockOut) {
       const diffMs = new Date(clockOut).getTime() - new Date(clockIn).getTime();
       calculatedMinutes = Math.max(0, Math.floor(diffMs / 60000));
 
-        if (finalStatus === "present" && calculatedMinutes < 300) {
+      if (finalStatus === "present" && calculatedMinutes < 300) {
         finalStatus = "half_day";
+      }
+      else if (finalStatus === "half_day" && calculatedMinutes > 300){
+        finalStatus = "present"
       }
     }
 
@@ -355,7 +358,7 @@ export const adminUpdateAttendance = async (req, res, next) => {
         }
       },
       update: {
-         status: finalStatus,
+        status: finalStatus,
         clockIn: clockIn ? new Date(clockIn) : null,
         clockOut: clockOut ? new Date(clockOut) : null,
         totalMinutes: calculatedMinutes,
@@ -431,7 +434,7 @@ export const getAdminAttendanceReport = async (req, res, next) => {
     const groupedData = customers.map(emp => {
       const empRecords = records.filter(r => r.customerId === emp.id);
       const weeklyData = {};
-      
+
       empRecords.forEach(r => {
         weeklyData[r.dateString] = r;
       });
@@ -453,17 +456,17 @@ export const getAdminAttendanceReport = async (req, res, next) => {
       };
     });
 
-   // 5. Calculate Global Stats for the SELECTED DATE RANGE (Weekly Total)
+    // 5. Calculate Global Stats for the SELECTED DATE RANGE (Weekly Total)
     const summaryRecords = await prisma.customerAttendance.findMany({
-      where: { 
+      where: {
         // 🚨 Changed from dateString: todayStr to use the full week range
-        dateString: { gte: startDate, lte: endDate } 
+        dateString: { gte: startDate, lte: endDate }
       },
       select: { status: true }
     });
 
     const summary = { present: 0, half_day: 0, workfromhome: 0, leave: 0, absent: 0 };
-    
+
     summaryRecords.forEach(r => {
       // Safely count the statuses for the whole week
       if (summary[r.status] !== undefined) {
@@ -497,7 +500,7 @@ export const getAdminAttendanceReport = async (req, res, next) => {
 export const getEmployeeAttendanceReport = async (req, res, next) => {
   try {
     const employeeId = req.employee.id;
-    const { startDate, endDate } = req.query; 
+    const { startDate, endDate } = req.query;
 
     // 1. Fetch Profile (Unchanged)
     const employeeData = await prisma.customer.findUnique({
@@ -510,7 +513,7 @@ export const getEmployeeAttendanceReport = async (req, res, next) => {
     try {
       const imgArray = typeof employeeData.CustomerImage === "string" ? JSON.parse(employeeData.CustomerImage) : employeeData.CustomerImage;
       if (Array.isArray(imgArray) && imgArray.length > 0) avatar = imgArray[0];
-    } catch (e) {}
+    } catch (e) { }
 
     // 2. Fetch records
     const attendanceRecords = await prisma.customerAttendance.findMany({
@@ -520,7 +523,7 @@ export const getEmployeeAttendanceReport = async (req, res, next) => {
 
     const weeklyData = {};
     let totalMinutesWeek = 0;
-    
+
     attendanceRecords.forEach(r => {
       weeklyData[r.dateString] = r;
       totalMinutesWeek += (r.totalMinutes || 0);
@@ -658,7 +661,7 @@ export const getAttendanceTrend = async (req, res, next) => {
     // 3. Map the data into daily aggregations
     const trendData = dateRange.map(dateStr => {
       const dayRecords = attendanceRecords.filter(r => r.dateString === dateStr);
-      
+
       let presentCount = 0;
       let absentCount = 0;
 
@@ -666,7 +669,7 @@ export const getAttendanceTrend = async (req, res, next) => {
         // Group working statuses into "Present"
         if (['present', 'half_day', 'workfromhome'].includes(r.status)) {
           presentCount++;
-        } 
+        }
         // Group non-working statuses into "Absent"
         else if (['absent', 'leave'].includes(r.status)) {
           absentCount++;
@@ -717,11 +720,11 @@ export const getAttendanceOverview = async (req, res, next) => {
     });
 
     let totalRecords = 0;
-    
+
     // Format names and calculate the total
     const formattedData = groupedRecords.map(record => {
       totalRecords += record._count.id;
-      
+
       let displayName = record.status;
       if (displayName === 'half_day') displayName = 'Late / Half Day';
       else if (displayName === 'workfromhome') displayName = 'Work From Home';
